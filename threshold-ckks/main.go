@@ -1,152 +1,65 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
 
 	"threshold-ckks/threshold"
 
 	"github.com/tuneinsight/lattigo/v6/core/rlwe"
-	"github.com/tuneinsight/lattigo/v6/ring"
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
 func main() {
-
-	// CKKS 参数
-	params, err := ckks.NewParametersFromLiteral(
-		ckks.ExampleParameters128BitLogN14LogQP438,
-	)
+	params, err := ckks.NewParametersFromLiteral(ckks.ExampleParameters128BitLogN14LogQP438)
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println("Max slots:", params.MaxSlots())
 
-	// threshold key generation
 	keys := threshold.GenerateKeys(params, 3)
-
 	fmt.Println("Party count:", len(keys.PartySK))
 	fmt.Println("PK ready:", keys.PK != nil)
 
-	// 测试数据
-	x := []float64{3, 1, 5}
-	y := []float64{2, 4, 5}
+	// Demo only: create two encrypted input vectors.
+	x, y := []float64{0.3, 1.2, 5, 2.1}, []float64{2.6, 0.4, 5, 0.2}
+	ctX := threshold.EncryptVector(params, keys.PK, x)
+	ctY := threshold.EncryptVector(params, keys.PK, y)
 
-	ctX := threshold.EncryptVector(
-		params,
-		keys.PK,
-		x,
-	)
-
-	ctY := threshold.EncryptVector(
-		params,
-		keys.PK,
-		y,
-	)
-
-	// homomorphic subtraction
-	ctZ := threshold.SubCiphertexts(
-		params,
-		ctX,
-		ctY,
-	)
-
-	// ============================
-	// Threshold partial decrypt
-	// ============================
-
-	mus := make([]ring.Poly, len(keys.PartySK))
-
-	for i, sk := range keys.PartySK {
-
-		mus[i] = threshold.PartialDecrypt(
-			params,
-			ctZ,
-			sk,
-		)
-
-		fmt.Println(
-			"Partial decrypt μ_", i, "generated",
-		)
+	maskKey := make([]byte, 32)
+	if _, err = rand.Read(maskKey); err != nil {
+		panic(err)
 	}
-
-	// aggregate μ_h
-	s := threshold.AggregateDecrypt(
-		params,
-		ctZ,
-		mus,
-	)
-
-	fmt.Println(
-		"Aggregated decrypt polynomial N =",
-		s.N(),
-	)
-
-	// ============================
-	// Normal decrypt
-	// ============================
-
-	decryptor := rlwe.NewDecryptor(
-		params,
-		keys.TotalSK,
-	)
-
-	pt := decryptor.DecryptNew(ctZ)
-
-	fmt.Println(
-		"Normal decrypt polynomial N =",
-		pt.Value.N(),
-	)
-
-	// 验证 polynomial 是否一致
-	fmt.Println(
-		"Polynomial equal:",
-		s.Equal(&pt.Value),
-	)
-
-	// ============================
-	// Normal decode
-	// ============================
-
-	encoder := ckks.NewEncoder(params)
-
-	normalDecoded := make([]float64, 3)
-
-	err = encoder.Decode(
-		pt,
-		normalDecoded,
-	)
-
-	if err != nil {
+	publicSeed := make([]byte, 32)
+	if _, err = rand.Read(publicSeed); err != nil {
 		panic(err)
 	}
 
-	fmt.Println(
-		"Normal plaintext:",
-		normalDecoded,
+	// Upper-layer API shape: SPDCmp(Enc(x), Enc(y)) -> Enc(f).
+	opts := threshold.DefaultSPDCmpOptions(len(x), maskKey, "state0:a1:a2", publicSeed, "call-0001")
+	result := threshold.SPDCmpWithTranscript(params, keys, ctX, ctY, opts)
+	fmt.Println("Reconstructor:", result.Reconstructor)
+	fmt.Println("Partial shares:", result.ShareCount)
+	fmt.Println("Transcript call:", result.Transcript.Broadcast.CallID)
+	fmt.Println("Transcript result from:", result.Transcript.Result.From)
+	fmt.Println("Comparison bits:", result.Bits)
+	fmt.Println("Time CSO broadcast:", result.Stats.Durations.CSOBroadcast)
+	fmt.Println("Time share generation:", result.Stats.Durations.ShareGeneration)
+	fmt.Println("Time reconstruction:", result.Stats.Durations.Reconstruction)
+	fmt.Println("Time total:", result.Stats.Durations.Total)
+	fmt.Printf("Comm bytes: broadcast=%d, broadcast_delivered=%d, shares=%d, result=%d, total=%d\n",
+		result.Stats.Communication.BroadcastBytes,
+		result.Stats.Communication.BroadcastDeliveredBytes,
+		result.Stats.Communication.ShareBytes,
+		result.Stats.Communication.ResultBytes,
+		result.Stats.Communication.TotalBytes,
 	)
 
-	// ============================
-	// Threshold plaintext
-	// 使用 normal plaintext 作为模板
-	// ============================
-
-	thresholdPT := threshold.PolyToPlaintext(
-		s,
-		pt,
-	)
-
-	thresholdDecoded := make([]float64, 3)
-
-	err = encoder.Decode(
-		thresholdPT,
-		thresholdDecoded,
-	)
-
-	if err != nil {
+	decryptor := rlwe.NewDecryptor(params, keys.TotalSK)
+	ptF := decryptor.DecryptNew(result.Ciphertext)
+	decodedF := make([]float64, len(result.Bits))
+	if err = ckks.NewEncoder(params).Decode(ptF, decodedF); err != nil {
 		panic(err)
 	}
-
-	fmt.Println(
-		"Threshold plaintext:",
-		thresholdDecoded,
-	)
+	fmt.Println("Enc(f) decrypt check:", decodedF)
 }

@@ -13,39 +13,27 @@ type ThresholdKeys struct {
 	PK      *rlwe.PublicKey
 }
 
+// AddSecretKeys sums party shares into the aggregate secret key.
 func AddSecretKeys(params ckks.Parameters, shares []*rlwe.SecretKey) *rlwe.SecretKey {
-	total := rlwe.NewSecretKey(params)
-	rp := params.GetRLWEParameters()
-
+	total, rp := rlwe.NewSecretKey(params), params.GetRLWEParameters()
 	for _, sk := range shares {
 		rp.RingQ().Add(total.Value.Q, sk.Value.Q, total.Value.Q)
 		rp.RingP().Add(total.Value.P, sk.Value.P, total.Value.P)
 	}
-
 	return total
 }
 
+// GenerateKeys creates secret shares, their aggregate key, and the public key.
 func GenerateKeys(params ckks.Parameters, parties int) *ThresholdKeys {
 	kgen := ckks.NewKeyGenerator(params)
-
-	keys := &ThresholdKeys{
-		PartySK: make([]*rlwe.SecretKey, parties),
-	}
-
-	// 每个 DCe_h 生成自己的 secret share
+	keys := &ThresholdKeys{PartySK: make([]*rlwe.SecretKey, parties)}
 	for i := 0; i < parties; i++ {
 		keys.PartySK[i] = rlwe.NewSecretKey(params)
 		kgen.GenSecretKey(keys.PartySK[i])
 	}
-
-	// sk = Σ sk_h
 	keys.TotalSK = AddSecretKeys(params, keys.PartySK)
-
-	// 从聚合 secret key 生成 pk
 	keys.PK = rlwe.NewPublicKey(params)
 	kgen.GenPublicKey(keys.TotalSK, keys.PK)
-
 	fmt.Println("Threshold key generation finished")
-
 	return keys
 }
