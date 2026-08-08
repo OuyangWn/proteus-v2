@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"proteus-protocols/protocols"
@@ -203,18 +202,9 @@ func main() {
 	if err := writeRewardCSV(csvPath, points, env.hospitals, env.patients, *window); err != nil {
 		panic(err)
 	}
-	agentSVG := filepath.Join(*outDir, "agent_reward_convergence.svg")
-	taskSVG := filepath.Join(*outDir, "agent0_task_reward_convergence.svg")
-	if err := writeChart(agentSVG, "Medical FrozenLake: agent reward convergence", agentNames(env.hospitals), agentSeries(points, env.hospitals)); err != nil {
-		panic(err)
-	}
-	if err := writeChart(taskSVG, "Medical FrozenLake: agent 0 task convergence", taskNames(env.patients), taskSeries(points, env.patients)); err != nil {
-		panic(err)
-	}
-
 	fmt.Printf("\ncompleted in %s\n", time.Since(start))
 	printStats("total stats", totalStats)
-	fmt.Printf("curves written:\n  %s\n  %s\n  %s\n", csvPath, agentSVG, taskSVG)
+	fmt.Printf("curves written:\n  %s\n", csvPath)
 }
 
 func newMedicalFrozenLakeEnv(hospitals, patients int) *medicalFrozenLakeEnv {
@@ -301,27 +291,41 @@ func (e *medicalFrozenLakeEnv) applyActions(tr *transition, actions [][]int, act
 	tr.agentReward = makeFloatMatrix(e.hospitals, e.patients)
 	tr.teamReward = make([]float64, e.patients)
 	for j := 0; j < e.patients; j++ {
-		terminal := false
-		for h := 0; h < e.hospitals; h++ {
-			if !active[j] {
+		if !active[j] {
+			for h := 0; h < e.hospitals; h++ {
 				tr.nextState[h][j] = tr.state[h][j]
-				continue
 			}
-			tr.nextState[h][j] = e.stepState(tr.state[h][j], tr.action[h][j])
-			tr.agentReward[h][j] = e.reward(h, tr.state[h][j], tr.nextState[h][j])
+			continue
+		}
+		hazard := false
+		allGoal := true
+		for h := 0; h < e.hospitals; h++ {
+			if e.isGoal(h, e.current[h][j]) {
+				// Already at goal — freeze, no step, no reward.
+				tr.nextState[h][j] = e.current[h][j]
+				tr.agentReward[h][j] = 0
+			} else {
+				tr.nextState[h][j] = e.stepState(tr.state[h][j], tr.action[h][j])
+				tr.agentReward[h][j] = e.reward(h, tr.state[h][j], tr.nextState[h][j])
+				e.current[h][j] = tr.nextState[h][j]
+				if e.isHazard(h, tr.nextState[h][j]) {
+					hazard = true
+				}
+			}
 			tr.teamReward[j] += tr.agentReward[h][j] / float64(e.hospitals)
-			e.current[h][j] = tr.nextState[h][j]
-			if e.isTerminal(h, tr.nextState[h][j]) {
-				terminal = true
+			if !e.isGoal(h, e.current[h][j]) {
+				allGoal = false
 			}
 		}
-		if terminal {
+		if hazard || allGoal {
 			active[j] = false
 		}
 	}
 }
 
-func (e *medicalFrozenLakeEnv) evaluateGreedyEpisode(q [][][][]float64, horizon int) rewardSnapshot {
+func (e *medicalFrozenLakeEnv) evaluateGreedyEpisode(
+	q [][][][]float64, horizon int,
+) rewardSnapshot {
 	agentReward := makeFloatMatrix(e.hospitals, e.patients)
 	teamReward := make([]float64, e.patients)
 	state := makeIntMatrix(e.hospitals, e.patients)
@@ -335,57 +339,73 @@ func (e *medicalFrozenLakeEnv) evaluateGreedyEpisode(q [][][][]float64, horizon 
 			if !active[j] {
 				continue
 			}
-			terminal := false
+			hazard := false
+			allGoal := true
 			for h := 0; h < e.hospitals; h++ {
+				if e.isGoal(h, state[h][j]) {
+					// Frozen at goal, no reward.
+					continue
+				}
 				action := rightBiasedArgmax(q[h][state[h][j]], j)
 				next := e.stepState(state[h][j], action)
 				reward := e.reward(h, state[h][j], next)
 				agentReward[h][j] += reward
 				teamReward[j] += reward / float64(e.hospitals)
 				state[h][j] = next
-				if e.isTerminal(h, next) {
-					terminal = true
+				if e.isHazard(h, next) {
+					hazard = true
 				}
 			}
-			if terminal {
+			// Check all-goal condition after stepping.
+			for h := 0; h < e.hospitals; h++ {
+				if !e.isGoal(h, state[h][j]) {
+					allGoal = false
+					break
+				}
+			}
+			if hazard || allGoal {
 				active[j] = false
 			}
 		}
 	}
-	return rewardSnapshot{teamAvg: avg(teamReward), agentAvg: agentAverages(agentReward), agent0Task: append([]float64(nil), agentReward[0]...)}
+	return rewardSnapshot{
+		teamAvg:    avg(teamReward),
+		agentAvg:   agentAverages(agentReward),
+		agent0Task: append([]float64(nil), agentReward[0]...),
+	}
 }
 
 func (e *medicalFrozenLakeEnv) priorQ(hospital, state, action int) float64 {
-	if e.isTerminal(hospital, state) {
+	if e.isTerminal(hospital, state) || e.isGoal(hospital, state) {
 		return 0
 	}
 	best := e.bestActionTowardGoal(hospital, state)
 	if action == best {
-		return 0.85
+		return 15
 	}
 	next := e.stepState(state, action)
 	switch {
 	case e.hazards[hospital][next]:
-		return -0.2
+		return -8
 	case e.distance(next, e.goals[hospital]) < e.distance(state, e.goals[hospital]):
-		return 0.35
+		return 5
 	default:
-		return 0.05
+		return -1
 	}
 }
 
 func (e *medicalFrozenLakeEnv) reward(hospital, state, next int) float64 {
 	switch {
 	case e.hazards[hospital][next]:
-		return 0
+		return -10 // fell into hazard — strong penalty
 	case next == e.goals[hospital]:
-		return 1
+		return 20 // reached goal — strong bonus
 	case e.distance(next, e.goals[hospital]) < e.distance(state, e.goals[hospital]):
-		return 0.7
+		return -0.1 // moved closer to goal — slight step cost
 	case next == state:
-		return 0.1
+		return -0.5 // bumped into wall — moderate step cost
 	default:
-		return 0.25
+		return -0.3 // moved but not closer — slight step cost
 	}
 }
 
@@ -432,7 +452,15 @@ func (e *medicalFrozenLakeEnv) distance(a, b int) int {
 }
 
 func (e *medicalFrozenLakeEnv) isTerminal(hospital, state int) bool {
-	return state == e.goals[hospital] || e.hazards[hospital][state]
+	return e.hazards[hospital][state]
+}
+
+func (e *medicalFrozenLakeEnv) isGoal(hospital, state int) bool {
+	return state == e.goals[hospital]
+}
+
+func (e *medicalFrozenLakeEnv) isHazard(hospital, state int) bool {
+	return e.hazards[hospital][state]
 }
 
 func baselineUpdate(q [][][][]float64, state, nextState, action [][]int, reward, alpha, gamma []float64) plainStep {
@@ -611,80 +639,6 @@ func writeRewardCSV(path string, points []curvePoint, hospitals, patients, windo
 	return writer.Error()
 }
 
-func writeChart(path, title string, names []string, series [][]float64) error {
-	const width, height = 900.0, 380.0
-	const left, right, top, bottom = 58.0, 22.0, 38.0, 56.0
-	colors := []string{"#0B7285", "#E67700", "#2B8A3E", "#C92A2A", "#5F3DC4", "#087F5B", "#A61E4D", "#1864AB"}
-	xMax := math.Max(1, float64(len(series[0])-1))
-	plotW, plotH := width-left-right, height-top-bottom
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="%.0f" height="%.0f" viewBox="0 0 %.0f %.0f">`, width, height, width, height))
-	b.WriteString(`<rect width="100%" height="100%" fill="#ffffff"/>`)
-	b.WriteString(fmt.Sprintf(`<text x="%.0f" y="24" font-family="Arial" font-size="18" font-weight="700">%s</text>`, left, title))
-	b.WriteString(fmt.Sprintf(`<line x1="%.0f" y1="%.0f" x2="%.0f" y2="%.0f" stroke="#222"/>`, left, top+plotH, left+plotW, top+plotH))
-	b.WriteString(fmt.Sprintf(`<line x1="%.0f" y1="%.0f" x2="%.0f" y2="%.0f" stroke="#222"/>`, left, top, left, top+plotH))
-	for tick := 0; tick <= 4; tick++ {
-		yv := float64(tick) / 4
-		y := top + plotH*(1-yv)
-		b.WriteString(fmt.Sprintf(`<line x1="%.0f" y1="%.1f" x2="%.0f" y2="%.1f" stroke="#e6e6e6"/>`, left, y, left+plotW, y))
-		b.WriteString(fmt.Sprintf(`<text x="12" y="%.1f" font-family="Arial" font-size="12" fill="#333">%.2f</text>`, y+4, yv))
-	}
-	for s, values := range series {
-		points := make([]string, len(values))
-		for i, value := range values {
-			x := left + plotW*float64(i)/xMax
-			y := top + plotH*(1-clamp01(value))
-			points[i] = fmt.Sprintf("%.1f,%.1f", x, y)
-		}
-		color := colors[s%len(colors)]
-		b.WriteString(fmt.Sprintf(`<polyline fill="none" stroke="%s" stroke-width="2.3" points="%s"/>`, color, strings.Join(points, " ")))
-		legendX := left + float64(s%4)*190
-		legendY := height - 30 + float64(s/4)*18
-		b.WriteString(fmt.Sprintf(`<line x1="%.0f" y1="%.0f" x2="%.0f" y2="%.0f" stroke="%s" stroke-width="3"/>`, legendX, legendY, legendX+24, legendY, color))
-		b.WriteString(fmt.Sprintf(`<text x="%.0f" y="%.0f" font-family="Arial" font-size="12" fill="#222">%s</text>`, legendX+30, legendY+4, names[s]))
-	}
-	b.WriteString(fmt.Sprintf(`<text x="%.0f" y="%.0f" font-family="Arial" font-size="12" fill="#333">training step</text>`, left+plotW/2-38, height-8))
-	b.WriteString(`</svg>`)
-	return os.WriteFile(path, []byte(b.String()), 0o644)
-}
-
-func agentSeries(points []curvePoint, hospitals int) [][]float64 {
-	out := make([][]float64, hospitals)
-	for h := 0; h < hospitals; h++ {
-		out[h] = make([]float64, len(points))
-		for i, p := range points {
-			out[h][i] = p.agentAvg[h]
-		}
-	}
-	return out
-}
-
-func taskSeries(points []curvePoint, patients int) [][]float64 {
-	out := make([][]float64, patients)
-	for j := 0; j < patients; j++ {
-		out[j] = make([]float64, len(points))
-		for i, p := range points {
-			out[j][i] = p.agent0Task[j]
-		}
-	}
-	return out
-}
-
-func agentNames(hospitals int) []string {
-	names := make([]string, hospitals)
-	for h := range names {
-		names[h] = fmt.Sprintf("agent%d", h)
-	}
-	return names
-}
-
-func taskNames(patients int) []string {
-	names := make([]string, patients)
-	for j := range names {
-		names[j] = fmt.Sprintf("task%d", j)
-	}
-	return names
-}
 
 func validateFlags(steps, horizon, hospitals, patients, states, actions, parties int, alpha, gamma, epsStart, epsEnd, epsDecay float64, window int) {
 	if steps <= 0 || horizon <= 0 || hospitals <= 0 || patients <= 0 || states <= 0 || actions <= 1 || parties <= 0 || window <= 0 {
