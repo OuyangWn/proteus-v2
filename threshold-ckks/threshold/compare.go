@@ -7,10 +7,10 @@ import (
 	"github.com/tuneinsight/lattigo/v6/schemes/ckks"
 )
 
-const demoMaskBaseBits uint = 10
-const demoMaskRandomBits uint = 4
+const demoMaskBaseBits uint = 20
+const demoMaskRandomBits uint = 10
 const demoFloodingSigma = 4.0
-const strictIntegerComparisonBias = 0.5
+const defaultComparisonBias = 0.0
 
 // CompareOptions configures one SPDCmp call; demo defaults use smaller masks than paper parameters.
 type CompareOptions struct {
@@ -50,7 +50,7 @@ func DefaultCompareOptions(length int, maskKey []byte, maskID string, publicSeed
 		MaskBaseBits:      demoMaskBaseBits,
 		MaskRandomBits:    demoMaskRandomBits,
 		FloodingSigma:     demoFloodingSigma,
-		StrictCompareBias: strictIntegerComparisonBias,
+		StrictCompareBias: defaultComparisonBias,
 	}
 }
 

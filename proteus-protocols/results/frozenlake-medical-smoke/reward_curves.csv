@@ -1,0 +1,2 @@
+step,epsilon,team_avg,team_avg_ma,agent0_avg,agent0_avg_ma,agent1_avg,agent1_avg_ma,agent2_avg,agent2_avg_ma,agent0_task0,agent0_task0_ma,agent0_task1,agent0_task1_ma,agent0_task2,agent0_task2_ma,agent0_task3,agent0_task3_ma,agent0_task4,agent0_task4_ma,duration_ms,comm_mb,spdcmp_calls,sedtp_calls,max_q_diff
+0,0.700000,0.423333,0.423333,0.430000,0.430000,0.490000,0.490000,0.350000,0.350000,0.700000,0.700000,0.700000,0.700000,0.250000,0.250000,0.250000,0.250000,0.250000,0.250000,29202.863000,747.458923,18,121,0.000000

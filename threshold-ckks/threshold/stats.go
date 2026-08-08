@@ -10,6 +10,7 @@ type ProtocolDurations struct {
 	CSOBroadcast    time.Duration
 	ShareGeneration time.Duration
 	Reconstruction  time.Duration
+	CSOFinalize     time.Duration
 	Total           time.Duration
 }
 

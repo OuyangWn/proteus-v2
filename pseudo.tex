@@ -1,0 +1,315 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Proteus VDN pseudocode -- single-task, fully-cooperative
+%
+% Standalone-compilable fragment: same macros/packages as proteus_en.tex so the
+% algorithms render identically when pasted back.  This file contains ONLY the
+% pseudocode blocks (no surrounding prose).  The blocks are kept aligned with
+% the current single-process simulation and VDN design.
+%
+% Compile:  pdflatex proteus_vdn_pseudo && pdflatex proteus_vdn_pseudo
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\documentclass[letterpaper,10pt]{article}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs,array,multirow}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{pifont}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{xspace}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+% --- macros inherited from proteus_en.tex (copied verbatim) ---
+\newcommand{\textbt}[1]{\textsf{\textbf{#1}}}
+\newcommand{\str}{\mathsf{flatten}}
+\newcommand{\CIRCLE}{\ding{108}}
+\newcommand{\Circle}{\ding{109}}
+\captionsetup{font=small,labelfont=bf,skip=4pt}
+\setlist{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=1.3em}
+\floatname{algorithm}{Protocol}
+\newtheorem{theorem}{Theorem}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+\newcommand{\proteus}{\textsc{Proteus}\xspace}
+\newcommand{\impc}{\textsf{SPDCmp}\xspace}
+\newcommand{\CSO}{\mathcal{C}_1}
+\newcommand{\DCe}{\mathcal{D}}
+\newcommand{\HOSP}{\mathcal{H}}
+\newcommand{\RAg}{\mathcal{R}}
+\newcommand{\KGC}{\mathcal{K}}
+\newcommand{\En}[1]{[\![#1]\!]}
+\newcommand{\sgn}{\mathrm{sgn}}
+\newcommand{\Br}{B_{r}}
+\newcommand{\zmin}{z_{\min}}
+\newcommand{\zmax}{z_{\max}}
+\newcommand{\Bct}{B_{\mathrm{ct}}}
+\newcommand{\sflood}{\sigma_{\mathrm{flood}}}
+\newcommand{\shh}{\sigma_{h}}
+\newcommand{\lc}{\lambda_{c}}
+\newcommand{\ls}{\lambda_{s}}
+\newcommand{\Cref}[1]{\S\ref{#1}}
+% VDN-specific notation (new symbols)
+\newcommand{\Qtot}{Q_{\mathrm{tot}}}
+\newcommand{\deltav}{\boldsymbol{\delta}}
+
+\title{Proteus VDN Pseudocode (Single-Task)}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{algorithm}[t]
+\caption{\impc: threshold comparison, encrypted output}
+\label{alg:impc}
+\small
+\begin{algorithmic}[1]
+\Require $\En{\mathbf{x}},\En{\mathbf{y}}$ at $\CSO$; seed $\mathsf{sd}$;
+         index $k$; mask key $k_r$
+\Ensure  $\En{\mathbf{f}}$ with $f_i=\mathbf{1}[x_i>y_i]$
+\Statex \textbf{Step 1 ($\CSO$)}
+\State $\En{\mathbf{z}}\gets\En{\mathbf{x}}\ominus\En{\mathbf{y}}$
+\State $r_i\gets\mathsf{PRF}(k_r,\mathsf{id}_i)$ mapped into
+       $[2^{a},2^{a+\Br})$ \Comment{$a{=}80,\Br{=}80$}
+\State $\mathbf{e}_{\mathrm{fl}}\gets\mathsf{DG}(\sflood)^{\ell}$,
+       $\sflood\ge 2^{\ls}\Bct$
+\State $\En{\mathbf{s}}\gets(\mathbf{r}\odot\En{\mathbf{z}})\oplus
+       \mathsf{Encode}(\mathbf{e}_{\mathrm{fl}})$; broadcast $(c_0,c_1)$
+\Statex \textbf{Step 2 (each $\DCe_h$, in parallel)}
+\State $\mathbf{e}_h\gets\mathsf{DG}(\shh)$,
+       $\shh\ge \Bct\sqrt{24N\alpha}\,2^{\nu/2}$ \Comment{per share; \emph{no} $1/\sqrt{H}$}
+\State $\boldsymbol{\mu}_h\gets\mathsf{sk}'_h\cdot c_1+\mathbf{e}_h \bmod q$
+\State $k^{*}\gets\mathsf{PRF}(\mathsf{sd},k)\bmod H$; send
+       $\boldsymbol{\mu}_h$ to $\DCe_{k^{*}}$
+\Statex \textbf{Step 3 ($\DCe_{k^{*}}$)}
+\State $\mathbf{s}\gets c_0+\sum_h\boldsymbol{\mu}_h \bmod q$;
+       $f_i\gets(1+\sgn(s_i))/2$
+\State \Return $\mathsf{Enc}_{\mathsf{pk}'}(\mathbf{f})$ to $\CSO$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{\textbt{SEDTP}: Secure Encrypted-Domain Transform}
+\label{alg:sedtp}
+\small
+\begin{algorithmic}[1]
+\Require $\En{\mathbf{x}}_{\mathsf{pk}_a}$ at $\CSO$; target key
+$\mathsf{pk}_b$
+\Ensure $\En{\mathbf{x}}_{\mathsf{pk}_b}$
+\Statex \textbf{Step 1 @ $\CSO$:}
+\State Sample additive mask $\mathbf{r}\in\mathbb{R}^\ell$ uniformly
+\State $\En{\mathbf{s}}_{\mathsf{pk}_a}
+\leftarrow \En{\mathbf{x}}_{\mathsf{pk}_a} \oplus
+\mathsf{Enc}_{\mathsf{pk}_a}(\mathbf{r})$
+\State Broadcast $\En{\mathbf{s}}_{\mathsf{pk}_a}$ to the custodians
+holding shares of $\mathsf{sk}_a$
+\Statex \textbf{Step 2 @ each $\DCe_h$:}
+\State $\mathbf{e}_h \sim \mathsf{DG}(\shh)$;
+$\boldsymbol{\mu}_h \leftarrow \mathsf{sk}_{a,h}\cdot c_1 + \mathbf{e}_h$
+\State Send $\boldsymbol{\mu}_h$ to reconstructor $\DCe_{k^*}$
+\Statex \textbf{Step 3 @ $\DCe_{k^*}$:}
+\State $\mathbf{s} \leftarrow c_0 + \sum_h \boldsymbol{\mu}_h$;
+$\En{\mathbf{s}}_{\mathsf{pk}_b}\leftarrow
+\mathsf{Enc}_{\mathsf{pk}_b}(\mathbf{s})$; send to $\CSO$
+\Statex \textbf{Step 4 @ $\CSO$:}
+\State $\En{\mathbf{x}}_{\mathsf{pk}_b}
+\leftarrow \En{\mathbf{s}}_{\mathsf{pk}_b}
+\ominus \mathsf{Enc}_{\mathsf{pk}_b}(\mathbf{r})$
+\State \Return $\En{\mathbf{x}}_{\mathsf{pk}_b}$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{\textbt{SOHL}: Secure One-Hot Lookup (row-fetch)}
+\label{alg:onehot}
+\small
+\begin{algorithmic}[1]
+\Require agent $i$'s state one-hot $\En{\mathbf{u}_i}$ over $|O_i|$ states,
+local Q-table $\{\En{Q_i(j,a)}\}$
+\Ensure full row $\{\En{Q_i(o_i,a)}\}_{a\in A_i}$
+\For{$a \in A_i$}
+  \State $\En{Q_i(o_i,a)} \gets
+    \textstyle\sum_{j=1}^{|O_i|} \En{\mathbf{u}_{i,j}} \otimes \En{Q_i(j,a)}$
+    \Comment{one-hot inner product; no comparison, no interaction}
+\EndFor
+\State \Return $\{\En{Q_i(o_i,a)}\}_{a\in A_i}$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{\textbt{SAQSA}: Secure Action and Q-value Selector}
+\label{alg:saqsa}
+\small
+\begin{algorithmic}[1]
+\Require $\En{\mathbf{u}_i}$, local Q-table $\En{Q_i}$
+\Ensure $\{\En{Q_i(o_i,a)}\}_{a\in A_i}$
+\State $\{\En{Q_i(o_i,a)}\}_a \gets \textbt{SOHL}_i(\En{\mathbf{u}_i},\En{Q_i})$
+  \Comment{fetch row}
+\State \Return $\{\En{Q_i(o_i,a)}\}_{a\in A_i}$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{\textbt{SQSA}: Secure Q-value Selector}
+\label{alg:sqsa}
+\small
+\begin{algorithmic}[1]
+\Require $\En{\mathbf{u}_i}$, $\En{\mathbf{v}_i}$, local Q-table $\En{Q_i}$
+\Ensure $\En{Q_i(o_i,a_i)}$
+\State $\En{Q_i(o_i,a_i)} \gets
+  \textstyle\sum_{j,k}\En{\mathbf{u}_{i,j}}\otimes\En{\mathbf{v}_{i,k}}
+  \otimes \En{Q_i(j,k)}$
+  \Comment{double one-hot mask sum; no comparison}
+\State \Return $\En{Q_i(o_i,a_i)}$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{\textbt{SMAA}: Secure Max and Argmax}
+\label{alg:smaa}
+\small
+\begin{algorithmic}[1]
+\Require $p=|A_i|$ ciphertexts $\{\En{\mathbf{x}_a}\}_{a\in A_i}$ under
+$\mathsf{pk}'$
+\Ensure $(\En{\max Q_i}, \En{\mathbf{v}_i})$ (max value, argmax one-hot)
+\State $Y \leftarrow (\En{\mathbf{x}_1},\ldots,\En{\mathbf{x}_p})$
+\State $V_a \leftarrow
+(\En{\mathbf{0}^\ell},\ldots,\En{\mathbf{1}^\ell},\ldots,\En{\mathbf{0}^\ell})$
+for $a=1,\ldots,p$;\quad $V\leftarrow(V_1,\ldots,V_p)$
+  \Comment{$V_a$ is the encrypted one-hot label for action $a$}
+\Repeat
+  \For{$i=1$ to $\lfloor |Y|/2 \rfloor$}
+    \State $\En{\mathbf{f}} \leftarrow \impc(Y_{2i-1}, Y_{2i})$
+      \Comment{ciphertext bit}
+    \State $Y'_i \leftarrow \En{\mathbf{f}} \otimes Y_{2i-1}
+    \oplus (\En{\mathbf{1}^\ell} \ominus \En{\mathbf{f}}) \otimes Y_{2i}$
+      \Comment{homomorphic select}
+    \State $V'_i \leftarrow \En{\mathbf{f}} \otimes V_{2i-1}
+    \oplus (\En{\mathbf{1}^\ell} \ominus \En{\mathbf{f}}) \otimes V_{2i}$
+  \EndFor
+  \If{$|Y|$ is odd}
+    \State $Y'_{(|Y|+1)/2} \leftarrow Y_{|Y|}$;
+    $V'_{(|V|+1)/2} \leftarrow V_{|V|}$
+  \EndIf
+  \State $Y \leftarrow Y'$, $V \leftarrow V'$
+\Until{$|Y|=1$}
+\State \Return $(Y_1, V_1)$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{\textbt{SPASA}: Secure $\epsilon$-greedy Action Selector}
+\label{alg:spasa}
+\small
+\begin{algorithmic}[1]
+\Require $\En{\mathbf{u}_i}$, local Q-table $\En{Q_i}$,
+encrypted exploit bit $\En{b_i}$, encrypted random one-hot
+$\En{\mathbf{v}^{\mathrm{rand}}_i}$
+\Ensure $(\En{\mathbf{v}_i}, \mathit{row})$ (mixed action one-hot, full row)
+\State $\mathit{row} \gets \textbt{SAQSA}_i(\En{\mathbf{u}_i}, \En{Q_i})$
+  \Comment{step 2: fetch row $\{\En{Q_i(o_i,a)}\}_a$}
+\State $(*, \En{\mathbf{v}^{\mathrm{argmax}}_i}) \gets
+  \textbt{SMAA}(\mathit{row})$
+  \Comment{step 4: always run argmax (explore too)}
+\State $\En{\mathbf{v}_i} \gets
+  \En{b_i} \otimes \En{\mathbf{v}^{\mathrm{argmax}}_i}
+  \oplus (\En{\mathbf{1}^\ell} \ominus \En{b_i})
+  \otimes \En{\mathbf{v}^{\mathrm{rand}}_i}$
+  \Comment{homomorphic select: $b_i{=}1$ exploit, $b_i{=}0$ explore}
+\State \Return $(\En{\mathbf{v}_i}, \mathit{row})$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{\textbt{SQUA}: Secure Q-Update}
+\label{alg:squa}
+\small
+\begin{algorithmic}[1]
+\Require local Q-table $\En{Q_i}$, shared $\En{\deltav}$, $\En{\mathbf{u}_i}$,
+$\En{\mathbf{v}_i}$, $\En{\alpha}$
+\Ensure updated $\En{Q_i}$
+\State $\En{\Delta Q_i} \gets \En{\alpha} \otimes \En{\deltav}
+  \otimes (\En{\mathbf{u}_i} \otimes \En{\mathbf{v}_i})$
+  \Comment{one-hot delta: only cell $(o_i,a_i)$ nonzero}
+\State $\En{Q_i} \gets \En{Q_i} \oplus \En{\Delta Q_i}$
+  \Comment{homomorphic add; target cell $+\alpha\delta$, rest $+0$}
+\State \Return $\En{Q_i}$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{\textbt{SMARLA}: Secure Multi-Agent RL Training}
+\label{alg:smarla}
+\small
+\begin{algorithmic}[1]
+\Require local Q-tables $\{\En{Q_h}\}_{h=1}^n$, $n$ agents, $L$ steps,
+$\En{\alpha}, \En{\gamma}$
+\Ensure updated $\{\En{Q_h}\}_{h=1}^n$
+\For{$t = 0$ to $L-1$}
+  \Statex \textit{// Step 1: observe, build one-hot, encrypt + key-transform;
+    draw $\epsilon$-greedy randomness}
+  \For{$h = 1$ to $n$ in parallel}
+    \State $\mathbf{u}_h \gets \mathrm{onehot}(o_h)$
+    \State $\En{\mathbf{u}_h}_{\mathsf{pk}_h} \gets
+      \mathsf{Enc}_{\mathsf{pk}_h}(\mathbf{u}_h)$;\quad
+      $\En{\mathbf{u}_h}_{\mathsf{pk}'} \gets
+      \textbt{SEDTP}(\En{\mathbf{u}_h}_{\mathsf{pk}_h}, \mathsf{pk}')$
+    \State $\xi_h \sim \mathrm{Unif}[0,1]$;\ $b_h \gets \mathbf{1}[\xi_h\ge\epsilon]$;\quad
+      $j_h \sim \mathrm{Unif}\{0,\ldots,|A_h|-1\}$;\ $\mathbf{v}^{\mathrm{rand}}_h \gets \mathrm{onehot}(j_h)$
+    \State $\En{b_h}_{\mathsf{pk}_h} \gets \mathsf{Enc}_{\mathsf{pk}_h}(b_h)$;\quad
+      $\En{\mathbf{v}^{\mathrm{rand}}_h}_{\mathsf{pk}_h} \gets
+      \mathsf{Enc}_{\mathsf{pk}_h}(\mathbf{v}^{\mathrm{rand}}_h)$
+    \State $\En{b_h}_{\mathsf{pk}'} \gets
+      \textbt{SEDTP}(\En{b_h}_{\mathsf{pk}_h}, \mathsf{pk}')$;\quad
+      $\En{\mathbf{v}^{\mathrm{rand}}_h}_{\mathsf{pk}'} \gets
+      \textbt{SEDTP}(\En{\mathbf{v}^{\mathrm{rand}}_h}_{\mathsf{pk}_h}, \mathsf{pk}')$
+  \EndFor
+  \Statex \textit{// Steps 2+4: $\epsilon$-greedy action (SAQSA + SMAA argmax)}
+  \For{$h = 1$ to $n$ in parallel}
+    \State $(\En{\mathbf{v}_h}, \mathit{row}_h) \gets
+      \textbt{SPASA}_h(\En{\mathbf{u}_h}_{\mathsf{pk}'}, \En{Q_h},
+      \En{b_h}_{\mathsf{pk}'}, \En{\mathbf{v}^{\mathrm{rand}}_h}_{\mathsf{pk}'})$
+  \EndFor
+  \Statex \textit{// Step 3: VDN aggregate $\Qtot(o_t,a_t)=\sum_h Q_h$}
+  \State $\En{\Qtot(o_t,a_t)} \gets
+    \textstyle\sum_h \textbt{SQSA}_h(\En{\mathbf{u}_h}_{\mathsf{pk}'},
+    \En{\mathbf{v}_h}, \En{Q_h})$
+    \Comment{after step 4 (needs $a_t$ from $\mathbf{v}_h$)}
+  \Statex \textit{// Step 6: return action + execute}
+  \For{$h = 1$ to $n$ in parallel}
+    \State $\En{\mathbf{v}_h}_{\mathsf{pk}_h} \gets
+      \textbt{SEDTP}(\En{\mathbf{v}_h}_{\mathsf{pk}'}, \mathsf{pk}_h)$
+    \State $\mathbf{v}_h \gets
+      \mathsf{Dec}_{\mathsf{sk}_h}(\En{\mathbf{v}_h}_{\mathsf{pk}_h})$;
+      $a_h \gets \operatorname*{arg\,max}_a \mathbf{v}_{h,a}$; execute $a_h$
+  \EndFor
+  \State Env returns shared $r$, new obs $o'_h$;
+    $\En{r}_{\mathsf{pk}'}\gets\mathsf{Enc}_{\mathsf{pk}'}(r)$;
+    each agent builds $\mathbf{u}'_h$ and uploads as in step 1
+  \Statex \textit{// Step 7: next-state $\max Q_h$ (Bellman target, pure max)}
+  \For{$h = 1$ to $n$ in parallel}
+    \State $\mathit{row}'_h \gets \textbt{SAQSA}_h(\En{\mathbf{u}'_h}_{\mathsf{pk}'}, \En{Q_h})$
+    \State $(\En{\max Q'_h}, *) \gets \textbt{SMAA}(\mathit{row}'_h)$
+  \EndFor
+  \State $\En{\max \Qtot'} \gets \textstyle\sum_h \En{\max Q'_h}$
+    \Comment{aggregate; no interaction}
+  \State $\En{\max \Qtot'} \gets
+    \textbt{SEDTP}(\En{\max \Qtot'}_{\mathsf{pk}'}, \mathsf{pk}')$
+    \Comment{same-key masked refresh}
+  \Statex \textit{// Step 8: shared $\deltav$ (global, once)}
+  \State $\En{\deltav} \gets \En{r}_{\mathsf{pk}'} \oplus \En{\gamma}\otimes\En{\max \Qtot'}
+    \ominus \En{\Qtot(o_t,a_t)}$
+  \Statex \textit{// Step 9: each agent writes back with the same $\deltav$}
+  \For{$h = 1$ to $n$ in parallel}
+    \State $\En{Q_h} \gets \textbt{SQUA}_h(\En{Q_h}, \En{\deltav},
+      \En{\mathbf{u}_h}_{\mathsf{pk}'}, \En{\mathbf{v}_h}, \En{\alpha})$
+  \EndFor
+  \State $o_h \gets o'_h$ for all $h$ \Comment{step 10}
+\EndFor
+\State \Return $\{\En{Q_h}\}_{h=1}^n$
+\end{algorithmic}
+\end{algorithm}
+
+\end{document}
